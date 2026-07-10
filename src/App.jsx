@@ -286,6 +286,7 @@ export default function App() {
                   resultCount={activeModule.count}
                   hiddenCols={hiddenCols}
                   resetKey={`${moduleKey}-${viewKey}`}
+                  valueOptions={data.valueOptions}
                 />
               </div>
 

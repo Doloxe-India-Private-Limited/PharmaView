@@ -3,6 +3,19 @@ import Modal from './Modal.jsx';
 
 const VALUE_LOGIC_OPTIONS = ['OR', 'AND', 'NOT'];
 
+function Highlight({ text, query }) {
+  if (!query.trim()) return text;
+  const idx = text.toLowerCase().indexOf(query.trim().toLowerCase());
+  if (idx === -1) return text;
+  return (
+    <>
+      {text.slice(0, idx)}
+      <mark className="qval-match">{text.slice(idx, idx + query.trim().length)}</mark>
+      {text.slice(idx + query.trim().length)}
+    </>
+  );
+}
+
 function fieldValueSummary(entry) {
   if (entry.type === 'num' || entry.type === 'date') {
     if (entry.rangeMin && entry.rangeMax) return `${entry.rangeMin} – ${entry.rangeMax}`;
@@ -116,17 +129,27 @@ function FieldRow({ field, entry, isOpen, onToggle, onClosePanel, onRemove, onTo
               placeholder={`Search ${field.n} values…`}
               value={valueQuery}
               onChange={(e) => setValueQuery(e.target.value)}
+              autoFocus
             />
+            {valueQuery.trim() && (
+              <button className="value-search-clear" onClick={() => setValueQuery('')} title="Clear">✕</button>
+            )}
           </div>
           <div className="value-option-list">
-            {options
-              .filter((v) => !valueQuery.trim() || v.toLowerCase().includes(valueQuery.trim().toLowerCase()))
-              .map((v) => (
+            {(() => {
+              const filtered = options.filter(
+                (v) => !valueQuery.trim() || v.toLowerCase().includes(valueQuery.trim().toLowerCase())
+              );
+              if (filtered.length === 0) {
+                return <div className="value-option-empty">No matches for "{valueQuery}"</div>;
+              }
+              return filtered.map((v) => (
                 <label className="value-option" key={v}>
                   <input type="checkbox" checked={entry.values.includes(v)} onChange={() => onToggleValue(field.n, v)} />
-                  {v}
+                  <Highlight text={v} query={valueQuery} />
                 </label>
-              ))}
+              ));
+            })()}
           </div>
           <div className="field-value-panel-actions">
             <button className="btn btn-sm btn-primary" onClick={onClosePanel}>
@@ -216,16 +239,14 @@ export default function SearchFieldsModal({
   const selectedCount = Object.keys(selected).length;
 
   // Clicking a field selects it (if not already) and opens its value panel,
-  // collapsing whichever other field's panel was open — so picking values for
-  // several fields never stacks their panels and balloons the modal's height.
-  // Clicking an already-selected field never closes it — it always (re)opens
-  // so checked values stay visible instead of toggling away.
+  // collapsing whichever other field's panel was open. Clicking the same open
+  // field again closes its panel.
   const toggleField = (field) => {
     setSelected((prev) => {
       if (prev[field.n]) return prev;
       return { ...prev, [field.n]: { type: field.t, values: [], rangeMin: '', rangeMax: '', valueLogic: 'OR' } };
     });
-    setOpenFieldName(field.n);
+    setOpenFieldName((prev) => (prev === field.n ? null : field.n));
   };
 
   const closePanel = () => setOpenFieldName(null);

@@ -1,13 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import Badge from './Badge.jsx';
 import { looksNumeric } from '../utils/classify.js';
 
-const MOCK_TOTAL_ROWS = 60; // materialized sample rows per view, enough to demonstrate real pagination
-const PAGE_WINDOW = 5; // how many page-number buttons to show around the current page
+const MOCK_TOTAL_ROWS = 60;
+const PAGE_WINDOW = 5;
 
-// A cell is either a plain string/number, or a small descriptor object:
-//   { badge: 'Approved' }                → rendered as a status pill
-//   { badge: 'High', suffix: ' 1.33×' }  → status pill plus trailing plain text
 function renderCell(cell) {
   if (cell && typeof cell === 'object' && 'badge' in cell) {
     return (
@@ -27,15 +25,11 @@ function cellClassName(cell, isFirstColumn) {
   return '';
 }
 
-// Plain-text form of a cell (unwraps badge objects), used for column filtering.
 function cellText(cell) {
   if (cell && typeof cell === 'object' && 'badge' in cell) return `${cell.badge}${cell.suffix || ''}`;
   return String(cell);
 }
 
-// Materializes a larger sample dataset by cycling the view's authored rows, so
-// pagination/column-filtering has enough rows to demonstrate against without
-// pretending the whole (much larger) real result set is loaded client-side.
 function getExpandedRows(view) {
   const base = view.rows;
   if (!base.length) return [];
@@ -44,12 +38,133 @@ function getExpandedRows(view) {
   return out;
 }
 
-export default function DataTable({ view, resultCount, hiddenCols, resetKey }) {
+// Highlight matched portion of text.
+function Highlight({ text, query }) {
+  if (!query.trim()) return text;
+  const idx = text.toLowerCase().indexOf(query.trim().toLowerCase());
+  if (idx === -1) return text;
+  return (
+    <>
+      {text.slice(0, idx)}
+      <mark className="qval-match">{text.slice(idx, idx + query.trim().length)}</mark>
+      {text.slice(idx + query.trim().length)}
+    </>
+  );
+}
+
+// Match a column name to a valueOptions key — tries exact, then case-insensitive,
+// then checks if any key word of length > 3 appears in the column name.
+function findOptions(col, valueOptions) {
+  if (!valueOptions || !col) return null;
+  if (valueOptions[col]) return valueOptions[col];
+  const colLower = col.toLowerCase();
+  const keys = Object.keys(valueOptions);
+  const ci = keys.find((k) => k.toLowerCase() === colLower);
+  if (ci) return valueOptions[ci];
+  // A key is fully contained in the col name (e.g. "HQ" in "HQ Country")
+  // or the col is fully contained in a key (e.g. "Company" in "Company Name")
+  const contained = keys.find(
+    (k) => colLower.includes(k.toLowerCase()) || k.toLowerCase().includes(colLower)
+  );
+  if (contained) return valueOptions[contained];
+  return null;
+}
+
+// Column filter input with type-ahead autocomplete. The suggestions dropdown is
+// rendered via a portal so it escapes the table's overflow:auto scroll container.
+function ColFilterInput({ col, value, onChange, valueOptions }) {
+  const options = findOptions(col, valueOptions);
+  const [open, setOpen] = useState(false);
+  const [activeIdx, setActiveIdx] = useState(-1);
+  const [dropStyle, setDropStyle] = useState({});
+  const inputRef = useRef(null);
+  const dropRef = useRef(null);
+
+  const filtered = value.trim() && options
+    ? options.filter((o) => o.toLowerCase().includes(value.trim().toLowerCase())).slice(0, 7)
+    : [];
+
+  // Recompute dropdown position whenever it opens or the window scrolls.
+  const reposition = () => {
+    if (!inputRef.current) return;
+    const r = inputRef.current.getBoundingClientRect();
+    setDropStyle({ top: r.bottom + 2, left: r.left, minWidth: Math.max(r.width, 160) });
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    reposition();
+    window.addEventListener('scroll', reposition, true);
+    return () => window.removeEventListener('scroll', reposition, true);
+  }, [open]);
+
+  // Close on outside click.
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e) => {
+      if (
+        inputRef.current?.contains(e.target) ||
+        dropRef.current?.contains(e.target)
+      ) return;
+      setOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  const pick = (val) => {
+    onChange(val);
+    setOpen(false);
+    setActiveIdx(-1);
+  };
+
+  const handleKey = (e) => {
+    if (!open || filtered.length === 0) return;
+    if (e.key === 'ArrowDown') { e.preventDefault(); setActiveIdx((i) => Math.min(i + 1, filtered.length - 1)); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setActiveIdx((i) => Math.max(i - 1, -1)); }
+    else if (e.key === 'Enter' && activeIdx >= 0) { e.preventDefault(); pick(filtered[activeIdx]); }
+    else if (e.key === 'Escape') setOpen(false);
+  };
+
+  return (
+    <>
+      <input
+        ref={inputRef}
+        type="text"
+        className="col-filter-input"
+        placeholder="Filter…"
+        value={value}
+        onChange={(e) => { onChange(e.target.value); setOpen(true); setActiveIdx(-1); }}
+        onFocus={() => { if (value.trim()) setOpen(true); }}
+        onKeyDown={handleKey}
+      />
+      {open && filtered.length > 0 && createPortal(
+        <ul
+          ref={dropRef}
+          className="col-filter-suggestions"
+          style={{ position: 'fixed', zIndex: 300, ...dropStyle }}
+        >
+          {filtered.map((s, idx) => (
+            <li
+              key={s}
+              className={activeIdx === idx ? 'active' : ''}
+              onMouseDown={(e) => { e.preventDefault(); pick(s); }}
+            >
+              <Highlight text={s} query={value} />
+            </li>
+          ))}
+        </ul>,
+        document.body
+      )}
+    </>
+  );
+}
+
+export default function DataTable({ view, resultCount, hiddenCols, resetKey, valueOptions }) {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
-  const [columnFilters, setColumnFilters] = useState({}); // colIndex -> string
+  const [columnFilters, setColumnFilters] = useState({});
 
-  // Reset pagination + column filters whenever the module/view changes.
   useEffect(() => {
     setPage(1);
     setColumnFilters({});
@@ -61,7 +176,9 @@ export default function DataTable({ view, resultCount, hiddenCols, resetKey }) {
     activeFilters.length === 0
       ? allRows
       : allRows.filter((row) =>
-          activeFilters.every(([idx, val]) => cellText(row[Number(idx)]).toLowerCase().includes(val.trim().toLowerCase()))
+          activeFilters.every(([idx, val]) =>
+            cellText(row[Number(idx)]).toLowerCase().includes(val.trim().toLowerCase())
+          )
         );
 
   const totalFiltered = filteredRows.length;
@@ -81,7 +198,6 @@ export default function DataTable({ view, resultCount, hiddenCols, resetKey }) {
   const rangeStart = totalFiltered === 0 ? 0 : startIdx + 1;
   const rangeEnd = Math.min(startIdx + pageSize, totalFiltered);
 
-  // Windowed page-number buttons around the current page.
   let winStart = Math.max(1, safePage - Math.floor(PAGE_WINDOW / 2));
   let winEnd = Math.min(totalPages, winStart + PAGE_WINDOW - 1);
   winStart = Math.max(1, winEnd - PAGE_WINDOW + 1);
@@ -97,12 +213,8 @@ export default function DataTable({ view, resultCount, hiddenCols, resetKey }) {
             : `Showing ${rangeStart}–${rangeEnd} of ${totalFiltered} loaded rows · ${resultCount} total matching records`}
         </span>
         <div className="pagectrl">
-          <button disabled={safePage <= 1} onClick={() => goToPage(1)} title="First page">
-            «
-          </button>
-          <button disabled={safePage <= 1} onClick={() => goToPage(safePage - 1)} title="Previous page">
-            ‹ Prev
-          </button>
+          <button disabled={safePage <= 1} onClick={() => goToPage(1)} title="First page">«</button>
+          <button disabled={safePage <= 1} onClick={() => goToPage(safePage - 1)} title="Previous page">‹ Prev</button>
           <div className="page-numbers">
             {winStart > 1 && (
               <>
@@ -122,19 +234,9 @@ export default function DataTable({ view, resultCount, hiddenCols, resetKey }) {
               </>
             )}
           </div>
-          <button disabled={safePage >= totalPages} onClick={() => goToPage(safePage + 1)} title="Next page">
-            Next ›
-          </button>
-          <button disabled={safePage >= totalPages} onClick={() => goToPage(totalPages)} title="Last page">
-            »
-          </button>
-          <select
-            value={pageSize}
-            onChange={(e) => {
-              setPageSize(Number(e.target.value));
-              setPage(1);
-            }}
-          >
+          <button disabled={safePage >= totalPages} onClick={() => goToPage(safePage + 1)} title="Next page">Next ›</button>
+          <button disabled={safePage >= totalPages} onClick={() => goToPage(totalPages)} title="Last page">»</button>
+          <select value={pageSize} onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}>
             <option value={10}>10 / page</option>
             <option value={25}>25 / page</option>
             <option value={50}>50 / page</option>
@@ -161,12 +263,11 @@ export default function DataTable({ view, resultCount, hiddenCols, resetKey }) {
                 (col, i) =>
                   !hiddenCols.has(i) && (
                     <th key={col}>
-                      <input
-                        type="text"
-                        className="col-filter-input"
-                        placeholder="Filter…"
+                      <ColFilterInput
+                        col={col}
                         value={columnFilters[i] || ''}
-                        onChange={(e) => setColumnFilter(i, e.target.value)}
+                        onChange={(val) => setColumnFilter(i, val)}
+                        valueOptions={valueOptions}
                       />
                     </th>
                   )

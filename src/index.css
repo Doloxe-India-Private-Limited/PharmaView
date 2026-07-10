@@ -168,25 +168,46 @@ input,select{font-family:inherit;}
 .qbuilder-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;}
 .qbuilder-head h3{margin:0;font-size:12.5px;text-transform:uppercase;letter-spacing:0.6px;color:var(--ink-soft);font-weight:700;}
 .qchain{display:flex;align-items:center;flex-wrap:wrap;gap:0;row-gap:10px;}
+/* qnode-wrap carries position:relative so the popover is positioned against it,
+   not against .qnode which has overflow:hidden that would clip the dropdown. */
+.qnode-wrap{position:relative;}
 .qnode{
   display:flex;align-items:stretch;background:var(--surface);border:1.5px solid var(--accent);border-radius:22px;
-  overflow:hidden;box-shadow:var(--shadow-sm);position:relative;
+  overflow:hidden;box-shadow:var(--shadow-sm);
 }
 .qnode .qseg{padding:7px 12px;font-size:12.5px;font-weight:500;}
 .qnode .qfield{color:var(--accent-dark);font-weight:700;background:var(--accent-soft);}
 .qnode .qop{color:var(--ink-soft);border-left:1px solid var(--line-soft);border-right:1px solid var(--line-soft);font-family:var(--mono);}
-.qnode .qval{color:var(--ink);font-weight:600;cursor:pointer;border-bottom:1.5px dashed transparent;}
-.qnode .qval:hover{border-bottom-color:var(--accent);background:var(--accent-soft);}
+.qnode .qval{display:flex;align-items:center;gap:5px;color:var(--ink);font-weight:600;cursor:pointer;border-radius:0;transition:background 0.1s;}
+.qnode .qval:hover,.qnode .qval.editing{background:var(--accent-soft);}
+.qval-pencil{width:11px;height:11px;opacity:0;flex:none;transition:opacity 0.12s;color:var(--accent-dark);}
+.qnode .qval:hover .qval-pencil,.qnode .qval.editing .qval-pencil{opacity:1;}
 .qval-edit{
   border:none;background:var(--accent-soft);color:var(--ink);font-weight:600;font-size:12.5px;
   padding:7px 10px;outline:1.5px solid var(--accent);border-radius:0;font-family:inherit;
 }
 .qval-edit-select{cursor:pointer;}
 .qval-edit-multi{
-  position:absolute;top:calc(100% + 6px);left:0;z-index:20;background:var(--surface);
-  border:1.5px solid var(--accent);border-radius:10px;box-shadow:var(--shadow-md,0 8px 24px rgba(0,0,0,.14));
-  padding:8px;min-width:180px;
+  position:absolute;top:calc(100% + 6px);left:0;z-index:100;background:var(--surface);
+  border:1.5px solid var(--accent);border-radius:10px;box-shadow:0 8px 28px rgba(0,0,0,.16);
+  padding:10px;min-width:240px;max-width:340px;
 }
+/* Field name header inside the edit popover */
+.qval-edit-header{display:flex;align-items:baseline;justify-content:space-between;gap:8px;padding-bottom:8px;margin-bottom:8px;border-bottom:1px solid var(--line-soft);}
+.qval-edit-field-label{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.6px;color:var(--accent-dark);}
+.qval-edit-hint{font-size:10px;color:var(--ink-faint);}
+/* Autocomplete suggestions dropdown */
+.qval-autocomplete-wrap{position:relative;margin-top:8px;}
+.qval-suggestions{
+  position:absolute;top:calc(100% + 3px);left:0;right:0;z-index:10;
+  background:var(--surface);border:1.5px solid var(--accent);border-radius:8px;
+  box-shadow:0 6px 18px rgba(0,0,0,.12);list-style:none;margin:0;padding:4px;
+  max-height:180px;overflow-y:auto;
+}
+.qval-suggestions li{padding:6px 9px;border-radius:6px;font-size:12.5px;cursor:pointer;color:var(--ink);}
+.qval-suggestions li:hover,.qval-suggestions li.active{background:var(--accent-soft);color:var(--accent-dark);}
+/* Highlight matched text in suggestions and modal results */
+mark.qval-match{background:rgba(9,95,100,0.18);color:var(--accent-dark);border-radius:2px;padding:0 1px;}
 .qval-edit-multi-opt{display:flex;align-items:center;gap:8px;padding:6px 7px;border-radius:6px;font-size:12.5px;color:var(--ink);cursor:pointer;white-space:nowrap;}
 .qval-edit-multi-opt:hover{background:var(--bg);}
 .qval-edit-multi-opt input{accent-color:var(--accent);}
@@ -331,6 +352,15 @@ tr.col-filter-row th{
 }
 .col-filter-input:focus{outline:none;border-color:var(--accent);}
 .col-filter-input::placeholder{color:var(--ink-faint);}
+/* Autocomplete dropdown for column filters — rendered via portal at body level
+   so it escapes the table's overflow:auto scroll container */
+.col-filter-suggestions{
+  background:var(--surface);border:1.5px solid var(--accent);border-radius:8px;
+  box-shadow:0 6px 20px rgba(0,0,0,.13);list-style:none;margin:0;padding:4px;
+  max-height:200px;overflow-y:auto;
+}
+.col-filter-suggestions li{padding:6px 10px;border-radius:5px;font-size:12.5px;cursor:pointer;color:var(--ink);white-space:nowrap;}
+.col-filter-suggestions li:hover,.col-filter-suggestions li.active{background:var(--accent-soft);color:var(--accent-dark);}
 
 /* AI panel */
 .ai-panel{
@@ -482,12 +512,17 @@ tr.col-filter-row th{
 }
 .value-search-box svg{width:13px;height:13px;color:var(--ink-faint);flex:none;}
 .value-search-box input{border:none;background:none;outline:none;flex:1;font-size:12.5px;color:var(--ink);}
+.value-search-clear{border:none;background:none;color:var(--ink-faint);font-size:11px;cursor:pointer;padding:0 2px;line-height:1;}
+.value-search-clear:hover{color:var(--rose);}
 .value-option-list{max-height:150px;overflow-y:auto;display:flex;flex-direction:column;gap:1px;}
 .value-option{display:flex;align-items:center;gap:8px;padding:6px 7px;border-radius:6px;font-size:12.5px;color:var(--ink);cursor:pointer;}
 .value-option:hover{background:var(--surface);}
 .value-option input{accent-color:var(--accent);}
+.value-option-empty{padding:10px 8px;font-size:12px;color:var(--ink-faint);text-align:center;}
 .value-option.no-match{display:none;}
-.value-tag-input-row{display:flex;gap:8px;}
+.value-tag-input-row{display:flex;gap:8px;margin-top:8px;}
+.value-tag-input-row input{flex:1;border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:12px;color:var(--ink);background:var(--bg);outline:none;}
+.value-tag-input-row input:focus{border-color:var(--accent);outline:1.5px solid var(--accent-soft);}
 .value-tag-input-row .btn{flex:none;}
 .value-tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px;}
 .value-tag{

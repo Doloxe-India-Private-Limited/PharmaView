@@ -3,18 +3,12 @@ import { Fragment, useEffect, useRef, useState } from 'react';
 const JOIN_OPTIONS = ['AND', 'OR', 'NOT'];
 const VALUE_LOGIC_OPTIONS = ['OR', 'AND', 'NOT'];
 
-// Conditions built from multiple checked values (Search fields modal) carry an
-// op of 'in' / 'excludes' / 'includes all of' and a value string joined with
-// ", " or " and ". Recover the individual values so the editor can show them
-// as checkboxes instead of one unmatched dropdown option.
 function splitValues(condition) {
   if (condition.op !== 'in' && condition.op !== 'excludes' && condition.op !== 'includes all of') return null;
   const sep = condition.op === 'includes all of' ? ' and ' : ', ';
   return condition.value.split(sep).map((v) => v.trim());
 }
 
-// Maps a condition's op back to the OR/AND/NOT logic it represents, so the
-// editor can show which one is active and let the user switch it.
 function opToLogic(op) {
   if (op === 'excludes') return 'NOT';
   if (op === 'includes all of') return 'AND';
@@ -27,60 +21,108 @@ function logicToOp(logic, valueCount) {
   return 'in';
 }
 
-// Inline editor for one condition's value. Reuses the field's known pick-list
-// (same VALUE_OPTIONS data the Search fields modal uses) as a dropdown/
-// checkbox-list when available, otherwise falls back to a plain text input —
-// so editing an existing condition never requires deleting and re-adding it.
-function ValueEditor({ condition, options, onSave, onCancel }) {
+// Highlights the matched portion of `text` for the query string.
+function Highlight({ text, query }) {
+  if (!query.trim()) return text;
+  const idx = text.toLowerCase().indexOf(query.trim().toLowerCase());
+  if (idx === -1) return text;
+  return (
+    <>
+      {text.slice(0, idx)}
+      <mark className="qval-match">{text.slice(idx, idx + query.trim().length)}</mark>
+      {text.slice(idx + query.trim().length)}
+    </>
+  );
+}
+
+// Unified editor: renders as a positioned popover outside .qnode (so overflow:hidden
+// on the chip never clips it). For fields with a known pick-list, typing filters
+// those options into a suggestion dropdown. For free-text fields, suggestions are
+// absent and the user types + Enter to add tags.
+function ValueEditor({ fieldName, condition, options, onSave, onCancel }) {
   const existingValues = splitValues(condition);
-  const [draft, setDraft] = useState(condition.value);
-  const [checked, setChecked] = useState(() => new Set(existingValues || []));
+  const [tags, setTags] = useState(() => existingValues || [condition.value]);
   const [logic, setLogic] = useState(() => opToLogic(condition.op));
+  const [draft, setDraft] = useState('');
+  const [suggestions, setSuggestions] = useState([]);
+  const [suggIdx, setSuggIdx] = useState(-1);
   const wrapRef = useRef(null);
   const inputRef = useRef(null);
 
-  useEffect(() => {
-    inputRef.current?.focus();
-    inputRef.current?.select?.();
-  }, []);
+  useEffect(() => { inputRef.current?.focus(); }, []);
 
+  // Dismiss on click outside the popover.
   useEffect(() => {
-    if (!existingValues) return undefined;
-    const onOutsideClick = (e) => {
+    const handler = (e) => {
       if (wrapRef.current && !wrapRef.current.contains(e.target)) onCancel();
     };
-    document.addEventListener('mousedown', onOutsideClick);
-    return () => document.removeEventListener('mousedown', onOutsideClick);
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const commit = () => {
-    const trimmed = draft.trim();
-    if (trimmed) onSave({ value: trimmed, op: condition.op });
-    else onCancel();
+  const updateDraft = (val) => {
+    setDraft(val);
+    setSuggIdx(-1);
+    if (val.trim() && options) {
+      const q = val.trim().toLowerCase();
+      setSuggestions(
+        options.filter((o) => o.toLowerCase().includes(q) && !tags.includes(o)).slice(0, 7)
+      );
+    } else {
+      setSuggestions([]);
+    }
   };
 
-  // Multi-value condition on a field with a known pick-list -> checkbox list
-  // plus the OR/AND/NOT logic picker, so both which values are picked AND how
-  // they combine (any of / all of / none of) can be changed in place.
-  if (existingValues && options) {
-    const toggle = (v) => {
-      setChecked((prev) => {
-        const next = new Set(prev);
-        next.has(v) ? next.delete(v) : next.add(v);
-        return next;
-      });
-    };
-    const save = () => {
-      const values = options.filter((o) => checked.has(o));
-      if (values.length === 0) return onCancel();
-      const op = logicToOp(logic, values.length);
-      if (values.length === 1) return onSave({ value: values[0], op });
-      const sep = logic === 'AND' ? ' and ' : ', ';
-      onSave({ value: values.join(sep), op });
-    };
-    return (
-      <div className="qval-edit-multi" ref={wrapRef}>
+  const pickSuggestion = (val) => {
+    if (!val || tags.includes(val)) return;
+    setTags((prev) => [...prev, val]);
+    setDraft('');
+    setSuggestions([]);
+    setSuggIdx(-1);
+    setTimeout(() => inputRef.current?.focus(), 0);
+  };
+
+  const addDraft = () => {
+    const v = draft.trim();
+    if (!v || tags.includes(v)) { setDraft(''); setSuggestions([]); return; }
+    setTags((prev) => [...prev, v]);
+    setDraft('');
+    setSuggestions([]);
+    setSuggIdx(-1);
+  };
+
+  const removeTag = (idx) => setTags((prev) => prev.filter((_, i) => i !== idx));
+
+  const handleKeyDown = (e) => {
+    if (suggestions.length > 0) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); setSuggIdx((i) => Math.min(i + 1, suggestions.length - 1)); return; }
+      if (e.key === 'ArrowUp') { e.preventDefault(); setSuggIdx((i) => Math.max(i - 1, -1)); return; }
+      if (e.key === 'Enter' && suggIdx >= 0) { e.preventDefault(); pickSuggestion(suggestions[suggIdx]); return; }
+    }
+    if (e.key === 'Enter') { e.preventDefault(); addDraft(); return; }
+    if (e.key === 'Escape') { if (suggestions.length) { setSuggestions([]); } else { onCancel(); } return; }
+    // Backspace on empty input removes the last tag.
+    if (e.key === 'Backspace' && !draft && tags.length > 0) setTags((prev) => prev.slice(0, -1));
+  };
+
+  const save = () => {
+    if (tags.length === 0) return onCancel();
+    const op = logicToOp(logic, tags.length);
+    if (tags.length === 1) return onSave({ value: tags[0], op });
+    const sep = logic === 'AND' ? ' and ' : ', ';
+    onSave({ value: tags.join(sep), op });
+  };
+
+  return (
+    <div className="qval-edit-multi" ref={wrapRef}>
+      {/* Header shows which field is being edited */}
+      <div className="qval-edit-header">
+        <span className="qval-edit-field-label">{fieldName}</span>
+        <span className="qval-edit-hint">Enter or ↑↓ to select</span>
+      </div>
+
+      {tags.length > 1 && (
         <div className="value-logic-row">
           <span className="value-logic-label">Match</span>
           <div className="value-logic-seg">
@@ -91,61 +133,60 @@ function ValueEditor({ condition, options, onSave, onCancel }) {
             ))}
           </div>
         </div>
-        {options.map((o) => (
-          <label key={o} className="qval-edit-multi-opt">
-            <input type="checkbox" checked={checked.has(o)} onChange={() => toggle(o)} />
-            {o}
-          </label>
-        ))}
-        <div className="qval-edit-multi-actions">
-          <button className="btn btn-sm btn-primary" onClick={save}>
-            Done
-          </button>
+      )}
+
+      {tags.length > 0 && (
+        <div className="value-tags" style={{ marginBottom: 8 }}>
+          {tags.map((v, i) => (
+            <span key={`${v}-${i}`} className="value-tag">
+              {v}
+              <button onClick={() => removeTag(i)}>✕</button>
+            </span>
+          ))}
         </div>
+      )}
+
+      <div className="qval-autocomplete-wrap">
+        <div className="value-tag-input-row">
+          <input
+            ref={inputRef}
+            type="text"
+            placeholder={options ? `Search ${fieldName}…` : 'Type a value, press Enter…'}
+            value={draft}
+            onChange={(e) => updateDraft(e.target.value)}
+            onKeyDown={handleKeyDown}
+          />
+          {!options && (
+            <button className="btn btn-sm" onMouseDown={(e) => { e.preventDefault(); addDraft(); }}>
+              Add
+            </button>
+          )}
+        </div>
+        {suggestions.length > 0 && (
+          <ul className="qval-suggestions">
+            {suggestions.map((s, idx) => (
+              <li
+                key={s}
+                className={suggIdx === idx ? 'active' : ''}
+                onMouseDown={(e) => { e.preventDefault(); pickSuggestion(s); }}
+              >
+                <Highlight text={s} query={draft} />
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
-    );
-  }
 
-  if (options) {
-    return (
-      <select
-        ref={inputRef}
-        className="qval-edit qval-edit-select"
-        value={draft}
-        onChange={(e) => onSave({ value: e.target.value, op: condition.op })}
-        onBlur={onCancel}
-      >
-        {!options.includes(condition.value) && <option value={condition.value}>{condition.value}</option>}
-        {options.map((o) => (
-          <option key={o} value={o}>
-            {o}
-          </option>
-        ))}
-      </select>
-    );
-  }
-
-  return (
-    <input
-      ref={inputRef}
-      type="text"
-      className="qval-edit"
-      value={draft}
-      onChange={(e) => setDraft(e.target.value)}
-      onBlur={commit}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter') commit();
-        if (e.key === 'Escape') onCancel();
-      }}
-    />
+      <div className="qval-edit-multi-actions">
+        <button className="btn btn-sm btn-primary" onClick={save}>Done</button>
+      </div>
+    </div>
   );
 }
 
 export default function SearchBuilder({ open, conditions, setConditions, onRunSearch, onClear, blankCondition, valueOptions }) {
   const [editingIndex, setEditingIndex] = useState(null);
 
-  // NOT reads as "AND NOT" in the criteria summary, i.e. it excludes rows
-  // matching this condition rather than requiring them.
   const setJoin = (index, join) => {
     setConditions((prev) => prev.map((c, i) => (i === index ? { ...c, join } : c)));
   };
@@ -202,11 +243,30 @@ export default function SearchBuilder({ open, conditions, setConditions, onRunSe
                 </div>
               </div>
             )}
-            <div className="qnode">
-              <span className="qseg qfield">{c.field}</span>
-              <span className="qseg qop">{c.op}</span>
-              {editingIndex === i ? (
+            {/* qnode-wrap has position:relative so the popover positions against
+                it, NOT against .qnode which has overflow:hidden that would clip it. */}
+            <div className="qnode-wrap">
+              <div className="qnode">
+                <span className="qseg qfield">{c.field}</span>
+                <span className="qseg qop">{c.op}</span>
+                <span
+                  className={`qseg qval${editingIndex === i ? ' editing' : ''}`}
+                  title="Click to edit"
+                  onClick={() => setEditingIndex(editingIndex === i ? null : i)}
+                >
+                  {c.value}
+                  <svg className="qval-pencil" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" aria-hidden="true">
+                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                  </svg>
+                </span>
+                <button className="qnode-remove" onClick={() => removeCondition(i)}>
+                  ✕
+                </button>
+              </div>
+              {editingIndex === i && (
                 <ValueEditor
+                  fieldName={c.field}
                   condition={c}
                   options={valueOptions[c.field]}
                   onSave={(value) => {
@@ -215,14 +275,7 @@ export default function SearchBuilder({ open, conditions, setConditions, onRunSe
                   }}
                   onCancel={() => setEditingIndex(null)}
                 />
-              ) : (
-                <span className="qseg qval" title="Click to edit" onClick={() => setEditingIndex(i)}>
-                  {c.value}
-                </span>
               )}
-              <button className="qnode-remove" onClick={() => removeCondition(i)}>
-                ✕
-              </button>
             </div>
           </Fragment>
         ))}
